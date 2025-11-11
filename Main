@@ -1,0 +1,516 @@
+#include <iostream>
+#include <iomanip>
+
+#include "Pump.hpp"
+#include "Turbine.hpp"
+#include "Stress.hpp"
+
+using namespace Pump;
+using namespace Turbine;
+using namespace mech;
+
+int main() {
+    
+    /*========================================================================= 
+    =========================== SHAFT DATA ==================================== 
+    =========================================================================*/
+    const double omega = 733.0;  // [rad/s]
+
+    /*========================================================================= 
+    ============================= LOX PUMP ==================================== 
+    =========================================================================*/
+
+    /*========================= 1. FLUID CONSTANTS ============================*/
+    // Antoine coefficients (KPa, K), make sure consistent units
+    FluidConstants LOX_constants;
+    LOX_constants.A = 3.9523;
+    LOX_constants.B = 340.024;
+    LOX_constants.C = -4.144;
+
+    /*========================= 1. FLUID STATES ===============================*/
+    FluidState inletState_LOX;
+    inletState_LOX.nu               = 1.74e-07;
+    inletState_LOX.pressure         = 3.792e5;
+    inletState_LOX.temperature      = 90.0;
+    inletState_LOX.density          = 1141.0;
+    inletState_LOX.velocity.axial   = 15.0;
+    inletState_LOX.computeVaporPressure(LOX_constants);
+
+    FluidState outletState_LOX;
+    outletState_LOX.nu              = 1.74e-07;
+    outletState_LOX.pressure        = 10.0e6;
+    outletState_LOX.temperature     = 90.0;
+    outletState_LOX.density         = 1141.0;
+    outletState_LOX.velocity.axial  = 30.0;
+    outletState_LOX.computeVaporPressure(LOX_constants);
+
+    /*========================= 2. PUMP ASSEMBLY SETUP ========================*/
+    const double Q_LOX   = 0.7836;                              // [m^3/s]
+    const double mdot_LOX = Q_LOX * inletState_LOX.density;     // [kg/s]
+
+    PumpModule LOX(inletState_LOX, outletState_LOX, Q_LOX, mdot_LOX, omega, "LOX");
+    LOX.pump.printInfo();
+
+    /*========================= 3. VOLUTE INITIALIZATION ======================*/
+    LOX.volute.headLoss = 169.7; // [J/kg] (≈ 0.1–0.3 * H_tot)
+
+    /*========================= 4. INDUCER & IMPELLER ========================*/
+    LOX.inducer.bladeCount  = 7;
+    LOX.impeller.bladeCount = 7;
+
+    LOX.inducer.operatingPoint.NPSH   =  5.68;
+    LOX.impeller.operatingPoint.NPSH  = 89.52;
+
+    LOX.inducer.operatingPoint.headRise  = LOX.impeller.operatingPoint.NPSH - LOX.inducer.operatingPoint.NPSH;
+    LOX.impeller.operatingPoint.headRise = LOX.pump.getHead() + LOX.volute.headLoss - LOX.inducer.operatingPoint.headRise;
+
+    LOX.inducer.performance.headCoeff  = 0.06;
+    LOX.impeller.performance.headCoeff = 0.46;
+
+    /*============================ 5. INDUCER DESIGN =========================*/
+    
+    // Cavitation check inducer inlet
+    CavitationAnalysis::isCavitationSafe(inletState_LOX, LOX.inducer.operatingPoint.NPSH);
+
+    LOX.inducer.hub_tip_ratio = 0.3;
+    LOX.inducer.tapering_hub  = 0.2443;   // [rad]
+    LOX.inducer.tapering_tip  = -0.1222;  // [rad]
+
+    // --- AoA angles --- //
+    LOX.inducer.inlet.hub.AoA   = 0.12;
+    LOX.inducer.outlet.hub.AoA  = 0.06;
+    LOX.inducer.inlet.mean.AoA  = 0.10;
+    LOX.inducer.outlet.mean.AoA = 0.05;
+    LOX.inducer.inlet.tip.AoA   = 0.08;
+    LOX.inducer.outlet.tip.AoA  = 0.04;
+
+    // --- Blade thickness --- //
+    LOX.inducer.inlet.bladeThickness  = 0.003;
+    LOX.inducer.outlet.bladeThickness = 0.003;
+
+    // --- Losses --- //
+    LOX.inducer.volLoss.tipLeakage    = 0.032;
+    LOX.inducer.volLoss.shroudLeakage = 0.035;
+
+    // --- Simulation --- //
+    InducerAnalysis LOXindAnalysis(LOX.inducer);
+    LOXindAnalysis.runSimulation();
+
+    //printOpPoint(std::cout, LOX.inducer.operatingPoint, "Inducer");
+    //printPerformance(std::cout, LOX.inducer.performance, "Inducer");
+    //printRotorSection(std::cout, LOX.inducer.inlet, "Inducer Inlet");
+    //printRotorSection(std::cout, LOX.inducer.outlet, "Inducer Outlet");
+    
+    /*============================ 6. IMPELLER DESIGN ========================*/
+    LOX.impeller.inlet = LOX.inducer.outlet;
+    LOX.impeller.outlet.bladeThickness = 0.003;
+
+    LOX.impeller.volLoss.tipLeakage    = 0.0;
+    LOX.impeller.volLoss.shroudLeakage = LOX.inducer.volLoss.shroudLeakage;
+
+    LOX.impeller.bladeAngleOut = 0.4189;
+    LOX.impeller.eta_hydro     = 0.74;
+
+    ImpellerAnalysis LOXimpAnalysis(LOX.impeller);
+    LOXimpAnalysis.runSimulation();
+
+    /*============================= 7. VOLUTE  =============================*/
+    // Volute data
+    LOX.volute.data = {
+        0.1 * LOX.Q,  // starting Q of the volute
+        3 * M_PI / 2, // total angular envelope volute 
+        2 * LOX.impeller.outlet.bladeHeight,  // base length volute 
+        LOX.impeller.outlet.bladeHeight,      // radial length volute (depends on theta_query, adjustable)
+        M_PI / 6.0                            // semi-aperture angle
+    };
+
+    // Volute construction
+    LOX.volute = Volute(LOX.pump, LOX.impeller, LOX.inducer, LOX.volute.data);
+    const double theta_query = M_PI / 4.0;
+    const double d_required = LOX.volute.solve(theta_query);
+
+    std::cout << "Required d at θ = " << theta_query << " rad is: "
+              << d_required << " m\n";
+
+    /*============================ 8. POWER ANALYSIS ========================*/
+    {
+    const double Re = std::pow(LOX.impeller.outlet.mean.diameter * 0.5, 2) * omega / inletState_LOX.nu;
+    const double clearance = 0.002;  // [m]
+    const double epsilon   = 1e-5;   // surface roughness
+
+    LOX.frontShroud = Shroud(LOX.density, omega, 
+                             LOX.impeller.inlet.tip.diameter, 
+                             LOX.impeller.outlet.tip.diameter, 
+                             0.004, LOX.inducer.length_ind, epsilon);
+
+    LOX.rearShroud = Shroud(LOX.density, omega, 
+                            0.0, LOX.impeller.outlet.hub.diameter, 
+                            0.0, 0.0, epsilon);
+
+    // --- Front disk --- //
+    double phi_front = FlowCoefficient::computeFromVolumetric(
+                       LOX.impeller.operatingPoint.Q_real - LOX.impeller.operatingPoint.Q, 
+                       omega, LOX.impeller.outlet.hub.diameter);
+    DiskFriction frontDisk_OX(LOX.frontShroud, Re, clearance);
+    LOX.P_front = frontDisk_OX.computePower(phi_front);
+
+    // --- Cylindrical gap --- //
+    CylinderFriction frontCylinder_OX(LOX.frontShroud, Re, clearance);
+    LOX.P_cyl = frontCylinder_OX.computePower();
+
+    // --- Back disk --- //
+    double phi_back = FlowCoefficient::computeFromVolumetric(
+                      LOX.impeller.operatingPoint.Q_real - LOX.impeller.operatingPoint.Q, 
+                      omega, LOX.impeller.outlet.hub.diameter);
+    DiskFriction backDisk_OX(LOX.rearShroud, Re, clearance);
+    LOX.P_back = backDisk_OX.computePower(phi_back);
+
+    // --- Total power --- //
+    LOX.power = 9.81 * LOX.density * LOX.inducer.operatingPoint.Q_real *
+                (LOX.inducer.operatingPoint.headRise + LOX.impeller.operatingPoint.headRise)
+                + LOX.P_front + LOX.P_back + LOX.P_cyl;
+
+    LOX.pump.setPower(LOX.power);
+    std::cout << "Pump power required: " << LOX.power / 1e6 << " MW\n\n";
+    }
+    
+    /*=========================== 9. AXIAL LOAD =============================*/
+    const double d_shaft   = LOX.inducer.inlet.hub.diameter;
+    std::cout << "Shaft diameter: " << d_shaft * 1000.0 << " mm\n\n";
+
+    // ---- Creation radial rib ---- //
+    RibGeometry geom_LOX;
+    geom_LOX.d_in  = 0.1219;
+    geom_LOX.d_out = 0.3759;
+    geom_LOX.s     = 0.006350;
+    geom_LOX.t     = 0.005760;
+    LOX.rib = RadialRib(geom_LOX, omega, LOX.density);
+
+    const double F_rib_OX = LOX.rib.axialForce();
+
+    // ---- Axial Force ---- //
+    PumpAxialLoad LOX_axialModel(
+        LOX.inducer,
+        LOX.impeller,
+        LOX.frontShroud,
+        LOX.rearShroud,
+        LOX.inletState.pressure,
+        1.1,
+        MountOrientation::Forward
+    );
+
+    const double Faxial_LOX  = LOX_axialModel.axialForce(d_shaft, F_rib_OX);
+    std::cout << "Axial thrust [N]: " << Faxial_LOX  << "  (Adjust rib thickness if unsatisfactory)\n";
+
+
+    /*========================================================================= 
+    ============================= RP1 PUMP ==================================== 
+    =========================================================================*/
+
+    /*========================= 1. FLUID CONSTANTS ============================*/
+    // TODO
+
+    /*========================= 1. FLUID STATES ===============================*/
+    FluidState inletState_RP1;
+    inletState_RP1.nu               = 1.8e-06;    // [m^2/s]
+    inletState_RP1.pressure         = 3.103e5;    // [Pa]
+    inletState_RP1.temperature      = 263.0;      // [K]
+    inletState_RP1.density          = 830.0;      // [kg/m^3]
+    inletState_RP1.velocity.axial   = 15.0;       // [m/s]
+    inletState_RP1.vaporPressure    = 50;         // approximate, to check
+
+    FluidState outletState_RP1;
+    outletState_RP1.nu              = 1.8e-06;    // [m^2/s]
+    outletState_RP1.pressure        = 10.0e6;     // [Pa]
+    outletState_RP1.temperature     = 263.0;      // [K]
+    outletState_RP1.density         = 830.0;      // [kg/m^3]
+    outletState_RP1.velocity.axial  = 30.0;       // [m/s]
+    outletState_RP1.vaporPressure    = 50;         // approximate, to check
+
+    /*========================= 2. PUMP ASSEMBLY SETUP ========================*/
+    const double Q_RP1    = 0.4590;                             // [m^3/s]
+    const double mdot_RP1 = Q_RP1 * inletState_RP1.density;     // [kg/s]
+
+    PumpModule RP1(inletState_RP1, outletState_RP1, Q_RP1, mdot_RP1, omega, "RP1");
+    RP1.pump.printInfo();
+    
+    /*========================= 3. VOLUTE INITIALIZATION ======================*/
+    RP1.volute.headLoss = 169.7; // [J/kg] (≈ 0.1–0.3 * H_tot)
+
+    /*========================= 4. INDUCER & IMPELLER ========================*/
+    RP1.inducer.bladeCount  = 7;
+    RP1.impeller.bladeCount = 7;
+
+    RP1.inducer.operatingPoint.NPSH   = 5.0;
+    RP1.impeller.operatingPoint.NPSH  = 55.0;
+
+    RP1.inducer.operatingPoint.headRise  = RP1.impeller.operatingPoint.NPSH - RP1.inducer.operatingPoint.NPSH;
+    RP1.impeller.operatingPoint.headRise = RP1.pump.getHead() + RP1.volute.headLoss - RP1.inducer.operatingPoint.headRise;
+
+    RP1.inducer.performance.headCoeff  = 0.06;
+    RP1.impeller.performance.headCoeff = 0.46;
+
+    /*============================ 5. INDUCER DESIGN =========================*/
+    // Cavitation check inducer inlet
+    CavitationAnalysis::isCavitationSafe(inletState_RP1, RP1.inducer.operatingPoint.NPSH);
+
+    RP1.inducer.hub_tip_ratio = 0.3;
+    RP1.inducer.tapering_hub  = 0.2443;   // [rad]
+    RP1.inducer.tapering_tip  = -0.1222;  // [rad]
+
+    // --- AoA angles --- //
+    RP1.inducer.inlet.hub.AoA   = 0.12;
+    RP1.inducer.outlet.hub.AoA  = 0.06;
+    RP1.inducer.inlet.mean.AoA  = 0.10;
+    RP1.inducer.outlet.mean.AoA = 0.05;
+    RP1.inducer.inlet.tip.AoA   = 0.08;
+    RP1.inducer.outlet.tip.AoA  = 0.04;
+
+    // --- Blade thickness --- //
+    RP1.inducer.inlet.bladeThickness  = 0.003;
+    RP1.inducer.outlet.bladeThickness = 0.003;
+
+    // --- Losses --- //
+    RP1.inducer.volLoss.tipLeakage    = 0.032;
+    RP1.inducer.volLoss.shroudLeakage = 0.035;
+
+    // --- Simulation --- //
+    InducerAnalysis RP1indAnalysis(RP1.inducer);
+    RP1indAnalysis.runSimulation();
+
+    //printOpPoint(std::cout, RP1.inducer.operatingPoint, "Inducer");
+    //printPerformance(std::cout, RP1.inducer.performance, "Inducer");
+    //printRotorSection(std::cout, RP1.inducer.inlet, "Inducer Inlet");
+    //printRotorSection(std::cout, RP1.inducer.outlet, "Inducer Outlet");
+
+    /*============================ 6. IMPELLER DESIGN ========================*/
+    RP1.impeller.inlet = RP1.inducer.outlet;
+    RP1.impeller.outlet.bladeThickness = 0.003;
+
+    RP1.impeller.volLoss.tipLeakage    = 0.0;
+    RP1.impeller.volLoss.shroudLeakage = RP1.inducer.volLoss.shroudLeakage;
+
+    RP1.impeller.bladeAngleOut = 0.4189;
+    RP1.impeller.eta_hydro     = 0.74;
+
+    ImpellerAnalysis RP1impAnalysis(RP1.impeller);
+    RP1impAnalysis.runSimulation();
+
+    /*============================= 7. VOLUTE  =============================*/
+    // Volute data
+    RP1.volute.data = {
+        0.1 * RP1.Q,  // starting Q of the volute
+        3 * M_PI / 2, // total angular envelope volute 
+        2 * RP1.impeller.outlet.bladeHeight,  // base length volute 
+        RP1.impeller.outlet.bladeHeight,      // radial length volute (depends on theta_query, adjustable)
+        M_PI / 6.0                            // semi-aperture angle
+    };
+
+    // Volute construction
+    RP1.volute = Volute(RP1.pump, RP1.impeller, RP1.inducer, RP1.volute.data);
+    // const double theta_query = M_PI / 4.0;
+    // const double d_required = LOX.volute.solve(theta_query);
+
+    // std::cout << "Required d at θ = " << theta_query << " rad is: "
+    //          << d_required << " m\n";
+
+    /*============================ 8. POWER ANALYSIS ========================*/
+    {
+    const double Re_RP1 = std::pow(RP1.impeller.outlet.mean.diameter * 0.5, 2) * omega / inletState_RP1.nu;
+    const double clearance = 0.002;  // [m]
+    const double epsilon   = 1e-5;   // surface roughness
+
+    RP1.frontShroud = Shroud(RP1.density, omega, 
+                            RP1.impeller.inlet.tip.diameter, 
+                            RP1.impeller.outlet.tip.diameter, 
+                            0.004, RP1.inducer.length_ind, epsilon);
+
+    RP1.rearShroud = Shroud(RP1.density, omega, 
+                            0.0, RP1.impeller.outlet.hub.diameter, 
+                            0.0, 0.0, epsilon);
+
+    // --- Front disk --- //
+    double phi_front = FlowCoefficient::computeFromVolumetric(
+                    RP1.impeller.operatingPoint.Q_real - RP1.impeller.operatingPoint.Q, 
+                    omega, RP1.impeller.outlet.hub.diameter);
+    DiskFriction frontDisk_RP1(RP1.frontShroud, Re_RP1, clearance);
+    RP1.P_front = frontDisk_RP1.computePower(phi_front);
+
+    // --- Cylindrical gap --- //
+    CylinderFriction frontCylinder_RP1(RP1.frontShroud, Re_RP1, clearance);
+    RP1.P_cyl = frontCylinder_RP1.computePower();
+
+    // --- Back disk --- //
+    double phi_back = FlowCoefficient::computeFromVolumetric(
+                    RP1.impeller.operatingPoint.Q_real - RP1.impeller.operatingPoint.Q, 
+                    omega, RP1.impeller.outlet.hub.diameter);
+    DiskFriction backDisk_RP1(RP1.rearShroud, Re_RP1, clearance);
+    RP1.P_back = backDisk_RP1.computePower(phi_back);
+
+    // --- Total power --- //
+    RP1.power = 9.81 * RP1.density * RP1.inducer.operatingPoint.Q_real *
+                (RP1.inducer.operatingPoint.headRise + RP1.impeller.operatingPoint.headRise)
+                + RP1.P_front + RP1.P_back + RP1.P_cyl;
+
+    RP1.pump.setPower(RP1.power);
+    std::cout << "Pump power required: " << RP1.power / 1e6 << " MW\n\n";
+    }
+
+    /*============================= 9. AXIAL LOAD ===========================*/
+
+    // ---- Creation radial rib ---- //
+    RibGeometry geom_RP1;
+    geom_RP1.d_in  = 0.1219;
+    geom_RP1.d_out = 0.3759;
+    geom_RP1.s     = 0.006350;
+    geom_RP1.t     = 0.005760;
+    RP1.rib = RadialRib(geom_RP1, omega, RP1.density);
+
+    const double F_rib_RP1 = RP1.rib.axialForce();
+
+    // ---- Axial Force ---- //
+    PumpAxialLoad RP1_axialModel(
+        RP1.inducer,
+        RP1.impeller,
+        RP1.frontShroud,
+        RP1.rearShroud,
+        RP1.inletState.pressure,
+        1.1,
+        MountOrientation::Reverse
+    );
+
+    RP1_axialModel.axialForce(d_shaft, F_rib_RP1);
+    std::cout << "Axial thrust [N]: " <<  RP1_axialModel.F_axial << "  (Adjust rib thickness if unsatisfactory)\n";
+    
+    /*=========================================================================
+    =============================== TURBINE ===================================
+    =========================================================================*/
+
+    // ================= 1. Inlet Gas and Flow ================= //
+    GasConstants mixture(301.6, 2734.0, 1.124);
+
+    GasState gasInlet;
+    gasInlet.pressure    = 4.413e6;
+    gasInlet.temperature = 1033.0;
+    gasInlet.idealDensity(mixture);
+
+    // Inlet Kinematics
+    BladeStation inletStation;
+    inletStation.mean.V_abs  = {0.0, 0.0, 0.0};
+    inletStation.mean.V_rel  = {0.0, 0.0, 0.0};
+    inletStation.mean.alpha  = M_PI / 2;
+    inletStation.mean.beta   = M_PI / 2;
+    inletStation.bladeHeight = 0.05;
+
+    // Total Quantities
+    gasInlet.totalPressure    = gasInlet.stagnationPressureFromVelocity(mixture, inletStation.mean.V_abs.magnitude());
+    gasInlet.totalTemperature = gasInlet.stagnationTemperatureFromVelocity(mixture, inletStation.mean.V_abs.magnitude());
+
+    // ================= 2. Operating Point ================= //
+    TurbineOperatingPoint opInput;
+    opInput.Consts         = mixture;
+    opInput.mdot           = 41.76;
+    opInput.omega          = 733.0;
+    opInput.exitPressure   = 1.862e5;
+    opInput.efficiency_mec = 0.845;
+    opInput.computeIdealEnthalpyDrop(gasInlet, opInput.exitPressure);
+
+    // ================= 3. Turbine Construction ================= //
+    TurbineAssembly turbine(opInput);
+
+    // --- Nozzle --- //
+    auto& nozzle = turbine.addStage<NozzleStage>();
+    nozzle.enthalpyDrop             = (1 - 0.06) * opInput.enthalpyDrop;
+    nozzle.eta_expansion            = 0.92;
+    nozzle.velCoeff                 = std::sqrt(0.92);
+    nozzle.exitAbsFlowAngle         = 0.4363;
+    nozzle.exitAoA                  = -0.03490;
+    nozzle.geometry.aspectRatio     = 9.7;
+    nozzle.throatHeight             = 0.03810;
+    nozzle.geometry.bladeThickness  = 0.00127;
+    nozzle.outlet.blockage          = 0.95;
+    nozzle.throatBlockage           = 0.97;
+    nozzle.density                  = 7850;
+
+    // --- Rotor 1 --- //
+    auto& rotor1 = turbine.addStage<RotorStage>();
+    rotor1.enthalpyDrop             = 0.06 * opInput.enthalpyDrop / 3;
+    rotor1.eta_expansion            = 0.92;
+    rotor1.velCoeff                 = 0.89;
+    rotor1.inletAoA                 = 0.03720;
+    rotor1.exitAoA                  = 0.0;
+    rotor1.exitRelFlowAngle         = 0.4363;
+    rotor1.geometry.bladeThickness  = 0.00127;
+    rotor1.geometry.solidity        = 1.82;
+    rotor1.geometry.chordLength     = 0.03556;
+    rotor1.outlet.blockage          = 0.95;
+    rotor1.density                  = 7850;
+
+    // --- Stator --- //
+    auto& stator = turbine.addStage<StatorStage>();
+    stator.enthalpyDrop             = 0.06 * opInput.enthalpyDrop / 3;
+    stator.eta_expansion            = 0.93;
+    stator.velCoeff                 = 0.89;
+    stator.exitAbsFlowAngle         = 0.6109;
+    stator.inletAoA                 = 0.028;
+    stator.exitAoA                  = 0.0;
+    stator.geometry.bladeThickness  = 0.00127;
+    stator.geometry.solidity        = 1.94;
+    stator.geometry.chordLength     = 0.03556;
+    stator.outlet.blockage          = 0.95;
+    stator.density                  = 7850;
+
+    // --- Rotor 2 --- //
+    auto& rotor2 = turbine.addStage<RotorStage>();
+    rotor2.enthalpyDrop             = 0.06 * opInput.enthalpyDrop / 3;
+    rotor2.eta_expansion            = 0.92;
+    rotor2.velCoeff                 = 0.89;
+    rotor2.inletAoA                 = 0.009;
+    rotor2.exitAoA                  = 0.0;
+    rotor2.exitRelFlowAngle         = 0.7679;
+    rotor2.geometry.bladeThickness  = 0.00127;
+    rotor2.geometry.solidity        = 1.67;
+    rotor2.geometry.chordLength     = 0.03556;
+    rotor2.outlet.blockage          = 0.95;
+    rotor2.density                  = 7850;
+    
+    // ================= 4. Run cascade ================= //
+    // turbine.printLayout();
+    turbine.runAll(gasInlet, inletStation, true);
+    
+    // ================= 5. Axial load ================= //
+    TurbineAxialLoad axialLoad(turbine.stages);
+
+    // --- Compute total rotor axial force ---
+    double totalAxialForce = axialLoad.axialForce();
+    std::cout << "Total rotor axial load: " << totalAxialForce << " N\n";
+    
+    // ================= 6. Stress Analysis ================= //
+    std::cout << "\n--- Blade Stress Analysis ---\n";
+    Material steel(7850.0, 350e6, 0.3, 1.1);   // rho, yield, nu, SF
+    for (const auto& st : turbine.stages)
+    {
+        // Consider only rotors
+        if (std::dynamic_pointer_cast<const RotorStage>(st))
+        {
+            TurbineStress stress(*st, steel);
+            double sigma_vm = stress.computeTurbineStress(*st);
+            std::cout << " | Von Mises = " << sigma_vm / 1e6 << " MPa\n";
+        }
+    }
+
+    /*=========================================================================
+    ========================   GLOBAL ANALYSIS   ==============================
+    =========================================================================*/
+    
+    // ================= 1. Power Balance ================= //
+    double power_balance = opInput.realPower - ( LOX.power + RP1.power );
+    std::cout << "power_balance: " << power_balance << "\n";
+
+    // ====== 2. Total Axial Force (For Bearings Sizing) ====== //
+    double F_axial_tot = RP1_axialModel.F_axial + Faxial_LOX + totalAxialForce;
+    std::cout << "Resulting Axial Force: " << F_axial_tot << "\n";
+
+    return 0;
+}
+
