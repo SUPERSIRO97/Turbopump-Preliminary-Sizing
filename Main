@@ -27,7 +27,7 @@ int main() {
     LOX_constants.B = 340.024;
     LOX_constants.C = -4.144;
 
-    /*========================= 1. FLUID STATES ===============================*/
+    /*========================= 2. FLUID STATES ===============================*/
     FluidState inletState_LOX;
     inletState_LOX.nu               = 1.74e-07;
     inletState_LOX.pressure         = 3.792e5;
@@ -44,17 +44,17 @@ int main() {
     outletState_LOX.velocity.axial  = 30.0;
     outletState_LOX.computeVaporPressure(LOX_constants);
 
-    /*========================= 2. PUMP ASSEMBLY SETUP ========================*/
+    /*========================= 3. PUMP ASSEMBLY SETUP ========================*/
     const double Q_LOX   = 0.7836;                              // [m^3/s]
     const double mdot_LOX = Q_LOX * inletState_LOX.density;     // [kg/s]
 
     PumpModule LOX(inletState_LOX, outletState_LOX, Q_LOX, mdot_LOX, omega, "LOX");
     LOX.pump.printInfo();
 
-    /*========================= 3. VOLUTE INITIALIZATION ======================*/
+    /*========================= 4. VOLUTE INITIALIZATION ======================*/
     LOX.volute.headLoss = 169.7; // [J/kg] (≈ 0.1–0.3 * H_tot)
 
-    /*========================= 4. INDUCER & IMPELLER ========================*/
+    /*========================= 5. INDUCER & IMPELLER ========================*/
     LOX.inducer.bladeCount  = 7;
     LOX.impeller.bladeCount = 7;
 
@@ -67,7 +67,7 @@ int main() {
     LOX.inducer.performance.headCoeff  = 0.06;
     LOX.impeller.performance.headCoeff = 0.46;
 
-    /*============================ 5. INDUCER DESIGN =========================*/
+    /*============================ 6. INDUCER DESIGN =========================*/
     
     // Cavitation check inducer inlet
     CavitationAnalysis::isCavitationSafe(inletState_LOX, LOX.inducer.operatingPoint.NPSH);
@@ -101,7 +101,7 @@ int main() {
     //printRotorSection(std::cout, LOX.inducer.inlet, "Inducer Inlet");
     //printRotorSection(std::cout, LOX.inducer.outlet, "Inducer Outlet");
     
-    /*============================ 6. IMPELLER DESIGN ========================*/
+    /*============================ 7. IMPELLER DESIGN ========================*/
     LOX.impeller.inlet = LOX.inducer.outlet;
     LOX.impeller.outlet.bladeThickness = 0.003;
 
@@ -114,7 +114,7 @@ int main() {
     ImpellerAnalysis LOXimpAnalysis(LOX.impeller);
     LOXimpAnalysis.runSimulation();
 
-    /*============================= 7. VOLUTE  =============================*/
+    /*============================= 8. VOLUTE  =============================*/
     // Volute data
     LOX.volute.data = {
         0.1 * LOX.Q,  // starting Q of the volute
@@ -132,7 +132,7 @@ int main() {
     std::cout << "Required d at θ = " << theta_query << " rad is: "
               << d_required << " m\n";
 
-    /*============================ 8. POWER ANALYSIS ========================*/
+    /*============================ 9. POWER ANALYSIS ========================*/
     {
     const double Re = std::pow(LOX.impeller.outlet.mean.diameter * 0.5, 2) * omega / inletState_LOX.nu;
     const double clearance = 0.002;  // [m]
@@ -174,7 +174,7 @@ int main() {
     std::cout << "Pump power required: " << LOX.power / 1e6 << " MW\n\n";
     }
     
-    /*=========================== 9. AXIAL LOAD =============================*/
+    /*========================== 10. AXIAL LOAD =============================*/
     const double d_shaft   = LOX.inducer.inlet.hub.diameter;
     std::cout << "Shaft diameter: " << d_shaft * 1000.0 << " mm\n\n";
 
@@ -210,7 +210,7 @@ int main() {
     /*========================= 1. FLUID CONSTANTS ============================*/
     // TODO
 
-    /*========================= 1. FLUID STATES ===============================*/
+    /*========================= 2. FLUID STATES ===============================*/
     FluidState inletState_RP1;
     inletState_RP1.nu               = 1.8e-06;    // [m^2/s]
     inletState_RP1.pressure         = 3.103e5;    // [Pa]
@@ -227,17 +227,17 @@ int main() {
     outletState_RP1.velocity.axial  = 30.0;       // [m/s]
     outletState_RP1.vaporPressure    = 50;         // approximate, to check
 
-    /*========================= 2. PUMP ASSEMBLY SETUP ========================*/
+    /*========================= 3. PUMP ASSEMBLY SETUP ========================*/
     const double Q_RP1    = 0.4590;                             // [m^3/s]
     const double mdot_RP1 = Q_RP1 * inletState_RP1.density;     // [kg/s]
 
     PumpModule RP1(inletState_RP1, outletState_RP1, Q_RP1, mdot_RP1, omega, "RP1");
     RP1.pump.printInfo();
     
-    /*========================= 3. VOLUTE INITIALIZATION ======================*/
+    /*========================= 4. VOLUTE INITIALIZATION ======================*/
     RP1.volute.headLoss = 169.7; // [J/kg] (≈ 0.1–0.3 * H_tot)
 
-    /*========================= 4. INDUCER & IMPELLER ========================*/
+    /*========================= 5. INDUCER & IMPELLER ========================*/
     RP1.inducer.bladeCount  = 7;
     RP1.impeller.bladeCount = 7;
 
@@ -250,7 +250,7 @@ int main() {
     RP1.inducer.performance.headCoeff  = 0.06;
     RP1.impeller.performance.headCoeff = 0.46;
 
-    /*============================ 5. INDUCER DESIGN =========================*/
+    /*============================ 6. INDUCER DESIGN =========================*/
     // Cavitation check inducer inlet
     CavitationAnalysis::isCavitationSafe(inletState_RP1, RP1.inducer.operatingPoint.NPSH);
 
@@ -283,7 +283,7 @@ int main() {
     //printRotorSection(std::cout, RP1.inducer.inlet, "Inducer Inlet");
     //printRotorSection(std::cout, RP1.inducer.outlet, "Inducer Outlet");
 
-    /*============================ 6. IMPELLER DESIGN ========================*/
+    /*============================ 7. IMPELLER DESIGN ========================*/
     RP1.impeller.inlet = RP1.inducer.outlet;
     RP1.impeller.outlet.bladeThickness = 0.003;
 
@@ -296,7 +296,7 @@ int main() {
     ImpellerAnalysis RP1impAnalysis(RP1.impeller);
     RP1impAnalysis.runSimulation();
 
-    /*============================= 7. VOLUTE  =============================*/
+    /*============================= 8. VOLUTE  =============================*/
     // Volute data
     RP1.volute.data = {
         0.1 * RP1.Q,  // starting Q of the volute
@@ -314,7 +314,7 @@ int main() {
     // std::cout << "Required d at θ = " << theta_query << " rad is: "
     //          << d_required << " m\n";
 
-    /*============================ 8. POWER ANALYSIS ========================*/
+    /*============================ 9. POWER ANALYSIS ========================*/
     {
     const double Re_RP1 = std::pow(RP1.impeller.outlet.mean.diameter * 0.5, 2) * omega / inletState_RP1.nu;
     const double clearance = 0.002;  // [m]
@@ -356,7 +356,7 @@ int main() {
     std::cout << "Pump power required: " << RP1.power / 1e6 << " MW\n\n";
     }
 
-    /*============================= 9. AXIAL LOAD ===========================*/
+    /*============================ 10. AXIAL LOAD ===========================*/
 
     // ---- Creation radial rib ---- //
     RibGeometry geom_RP1;
@@ -487,7 +487,7 @@ int main() {
     
     // ================= 6. Stress Analysis ================= //
     std::cout << "\n--- Blade Stress Analysis ---\n";
-    Material steel(7850.0, 350e6, 0.3, 1.1);   // rho, yield, nu, SF
+    Material steel(7850.0, 350e6, 0.3, 1.1);   // rho, yield, nu, S.F.
     for (const auto& st : turbine.stages)
     {
         // Consider only rotors
@@ -513,4 +513,3 @@ int main() {
 
     return 0;
 }
-
